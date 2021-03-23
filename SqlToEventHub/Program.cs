@@ -1,16 +1,17 @@
-﻿using System;
+﻿using Azure.Messaging.EventHubs;
+using Azure.Messaging.EventHubs.Producer;
+using Microsoft.Azure;
+using Microsoft.WindowsAzure.ServiceRuntime;
+using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Azure;
-using Microsoft.ServiceBus.Messaging;
-using Microsoft.WindowsAzure.ServiceRuntime;
-using Newtonsoft.Json;
-
 using WorkerHost.Extensions;
 using WorkerHost.SQL;
 
@@ -33,33 +34,32 @@ namespace WorkerHost
             const int SEND_GROUP_SIZE = 30;
 
             int sleepTimeMs;
-            if (!int.TryParse(CloudConfigurationManager.GetSetting("SleepTimeMs"), out sleepTimeMs))
+            if (!int.TryParse(ConfigurationManager.AppSettings["SleepTimeMs"], out sleepTimeMs))
             {
                 sleepTimeMs = 10000;
             }
 
-            string sqlDatabaseConnectionString = CloudConfigurationManager.GetSetting("sqlDatabaseConnectionString");
-            string serviceBusConnectionString = CloudConfigurationManager.GetSetting("Microsoft.ServiceBus.ServiceBusConnectionString");
-            string hubName = CloudConfigurationManager.GetSetting("Microsoft.ServiceBus.EventHubToUse");
+            string sqlDatabaseConnectionString = ConfigurationManager.AppSettings["sqlDatabaseConnectionString"];
+            string connectionString = ConfigurationManager.AppSettings["EventHubConnectionString"];
+            string eventHubName = ConfigurationManager.AppSettings["EventHubName"];
 
-            string dataTableName = CloudConfigurationManager.GetSetting("DataTableName");
-            string offsetKey = CloudConfigurationManager.GetSetting("OffsetKey");
+            string dataTableName = ConfigurationManager.AppSettings["DataTableName"];
+            string offsetKey = ConfigurationManager.AppSettings["OffsetKey"];
 
             string selectDataQueryTemplate =
                 ReplaceDataTableName(
-                    ReplaceOffsetKey(ReplaceReader(CloudConfigurationManager.GetSetting("DataQuery"), readeName),
+                    ReplaceOffsetKey(ReplaceReader(ConfigurationManager.AppSettings["DataQuery"], readeName),
                         offsetKey), dataTableName);
 
-            string createOffsetTableQuery = CloudConfigurationManager.GetSetting("CreateOffsetTableQuery");
-            string selectOffsetQueryTemplate = ReplaceReader(CloudConfigurationManager.GetSetting("OffsetQuery"), readeName);
-            string updateOffsetQueryTemplate = ReplaceReader(CloudConfigurationManager.GetSetting("UpdateOffsetQuery"), readeName);
-            string insertOffsetQueryTemplate = ReplaceReader(CloudConfigurationManager.GetSetting("InsertOffsetQuery"), readeName);
+            string createOffsetTableQuery = ConfigurationManager.AppSettings["CreateOffsetTableQuery"];
+            string selectOffsetQueryTemplate = ReplaceReader(ConfigurationManager.AppSettings["OffsetQuery"], readeName);
+            string updateOffsetQueryTemplate = ReplaceReader(ConfigurationManager.AppSettings["UpdateOffsetQuery"], readeName);
+            string insertOffsetQueryTemplate = ReplaceReader(ConfigurationManager.AppSettings["InsertOffsetQuery"], readeName);
 
             SqlTextQuery queryPerformer = new SqlTextQuery(sqlDatabaseConnectionString);
             queryPerformer.PerformQuery(createOffsetTableQuery);
 
-            EventHubClient eventHubClient = EventHubClient.CreateFromConnectionString(serviceBusConnectionString,
-                hubName);
+            var producer = new EventHubProducerClient(connectionString, eventHubName);
 
             for (; ; )
             {
@@ -89,7 +89,7 @@ namespace WorkerHost
 
                         foreach (var resultGroup in orderedByOffsetKey.Split(SEND_GROUP_SIZE))
                         {
-                            SendRowsToEventHub(eventHubClient, resultGroup).Wait();
+                            SendRowsToEventHub(producer, resultGroup).Wait();
 
                             string nextOffset = resultGroup.Max(r => r[offsetKey]).ToString();
                             queryPerformer.PerformQuery(ReplaceOffset(updateOffsetQueryTemplate, nextOffset));
@@ -104,7 +104,7 @@ namespace WorkerHost
             }
         }
 
-        private static async Task SendRowsToEventHub(EventHubClient eventHubClient, IEnumerable<object> rows)
+        private static async Task SendRowsToEventHub(EventHubProducerClient producer, IEnumerable<object> rows)
         {
             var memoryStream = new MemoryStream();
 
@@ -118,14 +118,27 @@ namespace WorkerHost
             Debug.Assert(memoryStream.Position > 0, "memoryStream.Position > 0");
 
             memoryStream.Position = 0;
-            EventData eventData = new EventData(memoryStream);
+            BinaryData binaryData = BinaryData.FromStream(memoryStream);
+            EventData eventData = new EventData(binaryData);
 
-            await eventHubClient.SendAsync(eventData);
+            try
+            {
+                EventDataBatch eventDataBatch = await producer.CreateBatchAsync();
+                if (!eventDataBatch.TryAdd(eventData))
+                {
+                    throw new Exception($"The event could not be added.");
+                }
+                await producer.SendAsync(eventDataBatch);
+            }
+            finally
+            {
+                await producer.CloseAsync();
+            }
         }
 
         private static string ReplaceDataTableName(string query, string tableName)
         {
-            return query.Replace("{tableName}", tableName);
+            return query.Replace("{DataTableName}", tableName);
         }
 
         private static string ReplaceOffsetKey(string query, string offsetKey)
