@@ -24,7 +24,7 @@ For more information about this sample, see the [Pulling data from SQL into an A
 * A version of Visual Studio installed on your desktop
 * An Azure SQL table being updated with data as the source of data  
   * A field in that table that is a unique, growing value - for example the record number 
-* A Service Bus namespace and an Event Hub as the target for the data
+* An EVENT HUBS namespace and an Event Hub as the target for the data
 
 ## Setup Tasks
 
@@ -89,7 +89,7 @@ Also in the ```<appSettings>``` section, enter
 
 * The **name of the Event Hub** to which you want the data sent. Find the line in the appSettings section that says
 ```
-<add key="Microsoft.ServiceBus.EventHubToUse" value="[event hub name]" />  
+<add key="EventHubName" value="[event hub name]" />  
 ```
 Replace ```[event hub name]``` with the name of the event hub that you created.
 
@@ -105,9 +105,9 @@ Endpoint=sb://myservicebusname.servicebus.windows.net/;SharedAccessKeyName=RootM
 ```
 Find the ```<appSettings>``` section in App.Config, and the line that says
 ```
-<add key="Microsoft.ServiceBus.ServiceBusConnectionString" value="[Service Bus connection string]" />
+<add key="EventHubConnectionString" value="[Event Hub connection string]" />
 ```
-Replace ```[Service Bus connection string]``` with the whole of the string that you copied from the 
+Replace ```[Event Hub connection string]``` with the whole of the string that you copied from the 
 portal, starting with "Endpoint" and ending with an "=".
 
 
